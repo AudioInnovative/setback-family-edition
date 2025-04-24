@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Setback – Family Edition</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- Google Fonts: Poppins -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <!-- Tailwind CSS via Play CDN (official) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { body: ['Poppins', 'sans-serif'] },
+          colors: { primary: '#FBBF24', accent: '#A3E635', cardRed: '#DC2626', cardBlack: '#111827' },
+          boxShadow: { card: '0 10px 15px rgba(0, 0, 0, 0.1)' },
+        },
+      },
+    }
+  </script>
+  <style>
+    /* Card sizing & flip */
+    .card{width:80px;height:120px;perspective:1000px;box-shadow:0 4px 12px rgba(0,0,0,0.18);border-radius:10px;transition:box-shadow .2s,transform .2s;background:white;display:flex;align-items:center;justify-content:center;}
+    .card>.inner{transition:transform .4s;transform-style:preserve-3d}
+    .flipped{transform:rotateY(180deg)}
+    .face,.back{position:absolute;backface-visibility:hidden}
+    .back{transform:rotateY(180deg)}
+    .card:hover{box-shadow:0 8px 24px rgba(0,0,0,0.28);z-index:2}
+    /* Basic layout helpers */
+    .table-area { min-height: 200px; }
+    .hand-area { min-height: 140px; display: flex; flex-direction: row; gap: 10px; justify-content: center; }
+    /* Table background */
+    body { background: radial-gradient(ellipse at center, #26734d 60%, #154734 100%); }
+    /* Table area border */
+    #table-layout { border: 6px solid #234c2d; border-radius: 32px; background:rgba(10,40,20,0.09); box-shadow:0 8px 32px #0008; position: relative; min-width: 700px; min-height: 540px; }
+    .seat-area { min-width: 260px; min-height: 160px; background:rgba(20,60,30,0.13); border-radius:18px; box-shadow:0 2px 8px #0002; display:flex; flex-direction:column; align-items:center; padding: 12px 8px 0 8px; }
+    .seat-label { font-weight: 600; font-size: 1.1rem; margin-bottom: 8px; text-shadow:0 1px 4px #0009; }
+    /* Trick area always on top */
+    .trick-center { z-index: 10; }
+    /* Score panel pop */
+    #score-panel { animation: scorePop .5s; }
+    @keyframes scorePop { 0%{transform:scale(0.6);} 70%{transform:scale(1.1);} 100%{transform:scale(1);} }
+    @media (max-width: 900px) {
+      #table-layout { min-width: 95vw; min-height: 64vw; }
+      .seat-area { min-width: 160px; min-height: 110px; }
+      .card { width: 54px; height: 80px; }
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-green-900 to-green-700 text-gray-100 font-body flex flex-col items-center min-h-screen select-none">
+  <div id="lobby" class="my-4 flex flex-col items-center">
+    <h2 class="text-xl font-bold mb-2">Choose Your Seat</h2>
+    <div id="seat-picker" class="flex gap-4 mb-4">
+      <button class="seat-btn px-4 py-2 rounded bg-gray-700 hover:bg-blue-600" data-seat="0">North</button>
+      <button class="seat-btn px-4 py-2 rounded bg-gray-700 hover:bg-blue-600" data-seat="1">East</button>
+      <button class="seat-btn px-4 py-2 rounded bg-gray-700 hover:bg-blue-600" data-seat="2">South</button>
+      <button class="seat-btn px-4 py-2 rounded bg-gray-700 hover:bg-blue-600" data-seat="3">West</button>
+    </div>
+    <div id="lobby-status" class="mb-2 text-md"></div>
+    <button id="start-game-btn" class="px-4 py-2 bg-green-600 text-white rounded shadow hidden">Start Game</button>
+  </div>
+  <div id="game-root" class="w-full max-w-4xl mx-auto p-4 hidden">
+    <h1 class="text-3xl font-bold text-center mb-6">Setback – Family Edition</h1>
+    <div id="table-layout" class="relative w-full h-[420px] flex items-center justify-center">
+      <!-- Table rendering will go here -->
+    </div>
+    <div id="controls" class="flex justify-center gap-4 mt-8">
+      <!-- Game controls (deal, bid, play, etc) -->
+      <button id="new-game-btn" class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-2 px-4 rounded">New Game</button>
+      <button id="mute-btn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded">Mute</button>
+    </div>
+    <div id="status" class="mt-4 text-center min-h-[32px]">
+      <!-- Status messages -->
+    </div>
+    <div id="deal-area" class="relative w-[400px] h-[160px] mx-auto mt-8"></div>
+  </div>
+
+  <!-- Framer Motion (UMD) -->
+  <script src="https://cdn.jsdelivr.net/npm/framer-motion@11/dist/framer-motion.umd.js"></script>
+  <!-- SortableJS -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <!-- Firebase v10 (app, auth, firestore) -->
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore-compat.js"></script>
+  <!-- Howler.js -->
+  <script src="https://cdn.jsdelivr.net/npm/howler@2.2.3/dist/howler.min.js"></script>
+  <!-- Main game logic will go here (inline or as a module) -->
+  <script>
+    // --- SVG Card Art Helper ---
+    function cardSVG(rank, suit) {
+      const suitSymbols = {
+        S: '♠', H: '♥', D: '♦', C: '♣'
+      };
+      const suitColors = {
+        S: 'black', C: 'black', H: 'red', D: 'red'
+      };
+      return `
+        <svg width="80" height="120" viewBox="0 0 80 120" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="2" width="76" height="116" rx="10" fill="white" stroke="#222" stroke-width="3"/>
+          <text x="12" y="28" font-size="22" font-family="serif" fill="${suitColors[suit]}">${rank}</text>
+          <text x="40" y="68" font-size="40" text-anchor="middle" font-family="serif" fill="${suitColors[suit]}">${suitSymbols[suit]}</text>
+          <text x="68" y="112" font-size="22" text-anchor="end" font-family="serif" fill="${suitColors[suit]}">${rank}</text>
+        </svg>
+      `;
+    }
+
+    // --- SVG Card Back Helper ---
+    function cardBackSVG() {
+      return `
+        <svg width="80" height="120" viewBox="0 0 80 120" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="2" width="76" height="116" rx="10" fill="#26734d" stroke="#222" stroke-width="3"/>
+          <rect x="12" y="12" width="56" height="96" rx="6" fill="#154734" stroke="#A3E635" stroke-width="2"/>
+          <text x="40" y="68" font-size="40" text-anchor="middle" font-family="serif" fill="#A3E635">🂠</text>
+        </svg>
+      `;
+    }
+
+    // --- GAME STATE & PHASES ---
+    const PHASES = ['deal', 'bidding', 'play', 'score'];
+    let gameState = {
+      phase: 'deal',
+      hand: [], // Player hand
+      botHand: [], // Bot hand
+      table: [], // Cards played to the table
+      trick: [], // Cards played this trick
+      message: 'Click "Deal" to start!',
+      playerTurn: true, // True if it's player's turn, false if bot's
+      playerScore: 0,
+      botScore: 0,
+      round: 1
+    };
+
+    // --- WINNER DETERMINATION (simple: highest rank wins trick) ---
+    function winnerOfTrick(trick) {
+      const rankOrder = {'9':0,'10':1,'J':2,'Q':3,'K':4,'A':5};
+      if (trick.length < 2) return null;
+      const [first, second] = trick;
+      // For now, highest rank wins (no suit/trump logic yet)
+      return rankOrder[first.rank] >= rankOrder[second.rank] ? first.player : second.player;
+    }
+
+    // --- ADVANCE ROUND ---
+    function advanceRound() {
+      const winner = winnerOfTrick(gameState.trick);
+      if (winner === 'You') gameState.playerScore++;
+      else if (winner === 'Bot') gameState.botScore++;
+      gameState.round++;
+      gameState.trick = [];
+      if (gameState.hand.length === 0 && gameState.botHand.length === 0) {
+        // End of game
+        gameState.phase = 'score';
+        if (gameState.playerScore > gameState.botScore) {
+          gameState.message = `Game over! You win ${gameState.playerScore} to ${gameState.botScore}!`;
+        } else if (gameState.playerScore < gameState.botScore) {
+          gameState.message = `Game over! Bot wins ${gameState.botScore} to ${gameState.playerScore}.`;
+        } else {
+          gameState.message = `Game over! It's a tie: ${gameState.playerScore} to ${gameState.botScore}.`;
+        }
+      } else {
+        gameState.message = `${winner} wins the trick! Round ${gameState.round}.`;
+        // Alternate who starts
+        gameState.playerTurn = (winner === 'You');
+        if (!gameState.playerTurn) setTimeout(botPlay, 800);
+      }
+      renderStatus();
+      renderScore();
+    }
+
+    // --- DEAL PHASE (shuffle both hands) ---
+    function shuffle(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+      return array;
+    }
+
+    // --- DEAL ---
+    function deal() {
+      const fullDeck = [
+        {rank: 'A', suit: 'S'}, {rank: 'K', suit: 'S'}, {rank: 'Q', suit: 'S'}, {rank: 'J', suit: 'S'}, {rank: '10', suit: 'S'}, {rank: '9', suit: 'S'},
+        {rank: 'A', suit: 'H'}, {rank: 'K', suit: 'H'}, {rank: 'Q', suit: 'H'}, {rank: 'J', suit: 'H'}, {rank: '10', suit: 'H'}, {rank: '9', suit: 'H'},
+        {rank: 'A', suit: 'D'}, {rank: 'K', suit: 'D'}, {rank: 'Q', suit: 'D'}, {rank: 'J', suit: 'D'}, {rank: '10', suit: 'D'}, {rank: '9', suit: 'D'},
+        {rank: 'A', suit: 'C'}, {rank: 'K', suit: 'C'}, {rank: 'Q', suit: 'C'}, {rank: 'J', suit: 'C'}, {rank: '10', suit: 'C'}, {rank: '9', suit: 'C'}
+      ];
+      shuffle(fullDeck);
+      gameState.phase = 'play';
+      gameState.hand = fullDeck.slice(0, 6);
+      gameState.botHand = fullDeck.slice(6, 12);
+      gameState.table = [];
+      gameState.trick = [];
+      gameState.message = 'Your turn! Tap or drag a card to play.';
+      gameState.playerTurn = true;
+      gameState.round = 1;
+      gameState.playerScore = 0;
+      gameState.botScore = 0;
+      renderStatus();
+      renderScore();
+    }
+
+    // --- PLAY PHASE: Play a card ---
+    function playCard(idx) {
+      if (gameState.phase !== 'play' || !gameState.playerTurn) return;
+      const card = gameState.hand.splice(idx, 1)[0];
+      gameState.trick.push({...card, player: 'You'});
+      gameState.message = `You played: ${card.rank}${card.suit}`;
+      gameState.playerTurn = false;
+      renderStatus();
+      if (gameState.trick.length === 2) {
+        setTimeout(advanceRound, 800);
+      } else {
+        setTimeout(botPlay, 800);
+      }
+    }
+
+    // --- BOT LOGIC: Play lowest card ---
+    function botPlay() {
+      if (gameState.phase !== 'play' || gameState.playerTurn || gameState.botHand.length === 0) return;
+      const rankOrder = {'9':0,'10':1,'J':2,'Q':3,'K':4,'A':5};
+      let minIdx = 0;
+      for (let i = 1; i < gameState.botHand.length; ++i) {
+        if (rankOrder[gameState.botHand[i].rank] < rankOrder[gameState.botHand[minIdx].rank]) {
+          minIdx = i;
+        }
+      }
+      const card = gameState.botHand.splice(minIdx, 1)[0];
+      gameState.trick.push({...card, player: 'Bot'});
+      gameState.message = `Bot played: ${card.rank}${card.suit}.`;
+      gameState.playerTurn = true;
+      renderStatus();
+      if (gameState.trick.length === 2) {
+        setTimeout(advanceRound, 800);
+      }
+    }
+
+    // --- RENDER STATUS ---
+    function renderStatus() {
+      document.getElementById('status').textContent = gameState.message;
+    }
+
+    // --- RENDER SCORE PANEL ---
+    function renderScore() {
+      let scoreDiv = document.getElementById('score-panel');
+      if (!scoreDiv) {
+        scoreDiv = document.createElement('div');
+        scoreDiv.id = 'score-panel';
+        scoreDiv.className = 'fixed top-4 right-4 bg-black bg-opacity-80 text-white rounded-lg px-6 py-3 shadow-xl text-lg z-50';
+        document.body.appendChild(scoreDiv);
+      }
+      scoreDiv.innerHTML = `<b>Score</b><br>You: ${gameState.playerScore} &nbsp;|&nbsp; Bot: ${gameState.botScore}`;
+      if (gameState.phase === 'score') {
+        scoreDiv.innerHTML += `<br><button id='restart-btn' class='mt-2 bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-1 px-3 rounded'>Restart</button>`;
+        document.getElementById('restart-btn').onclick = () => {
+          gameState.playerScore = 0;
+          gameState.botScore = 0;
+          deal();
+        };
+      }
+    }
+
+    // --- Local Lobby Logic ---
+    let localState = {
+      playerSeat: null,
+      seats: [null, null, null, null], // 0-3: null (empty), 'player', 'BOT'
+      started: false,
+      hands: null,
+      widow: null
+    };
+    function renderLobby() {
+      document.getElementById('lobby').style.display = localState.started ? 'none' : '';
+      const seatBtns = document.querySelectorAll('.seat-btn');
+      seatBtns.forEach(btn => {
+        const seat = Number(btn.dataset.seat);
+        btn.disabled = localState.seats[seat] !== null && localState.seats[seat] !== 'player';
+        btn.textContent =
+          (localState.seats[seat] === 'player') ? `You (${btn.textContent.replace(/\(.+\)/, '')})` :
+          (localState.seats[seat] === 'BOT') ? `BOT (${btn.textContent.replace(/\(.+\)/, '')})` : btn.textContent.replace(/\(.+\)/, '');
+      });
+      document.getElementById('start-game-btn').classList.remove('hidden');
+      document.getElementById('start-game-btn').disabled = (localState.playerSeat === null);
+      document.getElementById('lobby-status').textContent = localState.playerSeat !== null ?
+        `You are seated at ${['North','East','South','West'][localState.playerSeat]}` : '';
+    }
+    // Seat button logic
+    document.querySelectorAll('.seat-btn').forEach(btn => {
+      btn.onclick = () => {
+        const seat = Number(btn.dataset.seat);
+        if (localState.seats[seat] === null) {
+          localState.seats = [null, null, null, null];
+          localState.seats[seat] = 'player';
+          localState.playerSeat = seat;
+          // Fill other seats with bots for local play
+          for (let i = 0; i < 4; ++i) {
+            if (localState.seats[i] === null) localState.seats[i] = 'BOT';
+          }
+          renderLobby();
+        }
+      };
+    });
+    // Start game logic
+    document.getElementById('start-game-btn').onclick = () => {
+      localState.started = true;
+      document.getElementById('lobby').style.display = 'none';
+      document.getElementById('game-root').classList.remove('hidden');
+      startGameWithHands();
+    };
+    renderLobby();
+
+    // --- Deck/Hand Utilities ---
+    function generateDeck() {
+      const suits = ['C','D','H','S'];
+      const ranks = ['A','K','Q','J','10','9','8','7','6','5','4','3','2'];
+      let deck = [];
+      for (const s of suits) for (const r of ranks) deck.push(r+s);
+      deck.push('X'); // Joker
+      return deck;
+    }
+
+    function dealHands(deck, seats=4, handSize=6) {
+      const hands = Array.from({length: seats}, () => []);
+      for (let i=0; i<handSize*seats; ++i) hands[i%seats].push(deck.pop());
+      const widow = deck; // remaining cards
+      return {hands, widow};
+    }
+
+    // --- Game Start: Deal Hands and Render ---
+    function startGameWithHands() {
+      const deck = shuffle(generateDeck());
+      const {hands, widow} = dealHands(deck);
+      localState.hands = hands;
+      localState.widow = widow;
+      renderTableFromSeats();
+    }
+
+    // --- Table Rendering Based on Seats, with Hands ---
+    function renderTableFromSeats() {
+      const table = document.getElementById('table-layout');
+      table.innerHTML = '';
+      const seatNames = ['North', 'East', 'South', 'West'];
+      // Move seats farther from center
+      const seatPositions = [
+        {top: '5%', left: '50%', transform: 'translate(-50%, 0)'}, // North
+        {top: '50%', right: '3%', transform: 'translate(0, -50%)'}, // East
+        {bottom: '5%', left: '50%', transform: 'translate(-50%, 0)'}, // South
+        {top: '50%', left: '3%', transform: 'translate(0, -50%)'}, // West
+      ];
+      localState.seats.forEach((who, i) => {
+        const seatDiv = document.createElement('div');
+        seatDiv.className = 'absolute seat-area';
+        Object.assign(seatDiv.style, seatPositions[i]);
+        // Add seat label
+        const label = document.createElement('div');
+        label.className = 'seat-label';
+        label.textContent = seatNames[i] + (who ? `: ${who}` : '');
+        seatDiv.appendChild(label);
+        // Render hand for player or bot
+        if (localState.hands && localState.hands[i]) {
+          const handDiv = document.createElement('div');
+          handDiv.className = 'hand-area';
+          localState.hands[i].forEach(card => {
+            const cardEl = document.createElement('div');
+            cardEl.className = 'card';
+            if (who === 'player') {
+              const rank = card.length === 3 ? card.slice(0,2) : card[0];
+              const suit = card[card.length-1];
+              cardEl.innerHTML = cardSVG(rank, suit);
+            } else {
+              cardEl.innerHTML = cardBackSVG();
+            }
+            handDiv.appendChild(cardEl);
+          });
+          seatDiv.appendChild(handDiv);
+        }
+        table.appendChild(seatDiv);
+      });
+      // Center play area
+      const centerDiv = document.createElement('div');
+      centerDiv.className = 'absolute left-1/2 top-1/2 w-24 h-24 bg-green-800 rounded-full flex items-center justify-center text-lg font-bold trick-center shadow-lg border-4 border-green-900';
+      centerDiv.style.transform = 'translate(-50%, -50%)';
+      centerDiv.textContent = 'Trick';
+      table.appendChild(centerDiv);
+    }
+
+    // --- Button handlers ---
+    document.getElementById('new-game-btn').addEventListener('click', deal);
+    document.getElementById('mute-btn').addEventListener('click', () => {
+      document.getElementById('status').textContent = 'Audio muted/unmuted! (logic coming soon)';
+    });
+
+    // --- Initial render ---
+    renderStatus();
+    renderScore();
+  </script>
+</body>
+</html>
