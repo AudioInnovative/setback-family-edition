@@ -69,6 +69,7 @@
     </div>
     <div id="controls" class="flex justify-center gap-4 mt-8">
       <!-- Game controls (deal, bid, play, etc) -->
+      <button id="deal-btn" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded hidden">Deal</button>
       <button id="new-game-btn" class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-2 px-4 rounded">New Game</button>
       <button id="mute-btn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded">Mute</button>
     </div>
@@ -76,10 +77,9 @@
       <!-- Status messages -->
     </div>
     <div id="deal-area" class="relative w-[400px] h-[160px] mx-auto mt-8"></div>
+    <div id="deal-animation-deck" class="absolute left-1/2 top-1/2 w-16 h-24 -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-none"></div>
   </div>
 
-  <!-- Framer Motion (UMD) -->
-  <script src="https://cdn.jsdelivr.net/npm/framer-motion@11/dist/framer-motion.umd.js"></script>
   <!-- SortableJS -->
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
   <!-- Firebase v10 (app, auth, firestore) -->
@@ -131,21 +131,30 @@
       playerTurn: true, // True if it's player's turn, false if bot's
       playerScore: 0,
       botScore: 0,
-      round: 1
+      round: 1,
+      bids: [null, null, null, null], // null = not yet bid, number = bid, 0 = pass
+      currentBidder: 0, // left of dealer starts
+      highestBid: 0,
+      highestBidder: null,
+      trump: null,
     };
 
     // --- WINNER DETERMINATION (simple: highest rank wins trick) ---
-    function winnerOfTrick(trick) {
-      const rankOrder = {'9':0,'10':1,'J':2,'Q':3,'K':4,'A':5};
-      if (trick.length < 2) return null;
-      const [first, second] = trick;
-      // For now, highest rank wins (no suit/trump logic yet)
-      return rankOrder[first.rank] >= rankOrder[second.rank] ? first.player : second.player;
+    function determineTrickWinner(trick) {
+      // Simple logic: highest rank wins (A>K>Q>...>2), ties go to player
+      const rankOrder = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+      const card1 = trick[0];
+      const card2 = trick[1];
+      const r1 = rankOrder.indexOf(card1.rank);
+      const r2 = rankOrder.indexOf(card2.rank);
+      if (r1 > r2) return card1.player;
+      if (r2 > r1) return card2.player;
+      return card1.player; // Tie: first played wins
     }
 
     // --- ADVANCE ROUND ---
     function advanceRound() {
-      const winner = winnerOfTrick(gameState.trick);
+      const winner = determineTrickWinner(gameState.trick);
       if (winner === 'You') gameState.playerScore++;
       else if (winner === 'Bot') gameState.botScore++;
       gameState.round++;
@@ -187,34 +196,147 @@
         {rank: 'A', suit: 'D'}, {rank: 'K', suit: 'D'}, {rank: 'Q', suit: 'D'}, {rank: 'J', suit: 'D'}, {rank: '10', suit: 'D'}, {rank: '9', suit: 'D'},
         {rank: 'A', suit: 'C'}, {rank: 'K', suit: 'C'}, {rank: 'Q', suit: 'C'}, {rank: 'J', suit: 'C'}, {rank: '10', suit: 'C'}, {rank: '9', suit: 'C'}
       ];
-      shuffle(fullDeck);
-      gameState.phase = 'play';
-      gameState.hand = fullDeck.slice(0, 6);
-      gameState.botHand = fullDeck.slice(6, 12);
+      gameState.phase = 'deal-anim';
+      gameState.hand = [];
+      gameState.botHand = [];
       gameState.table = [];
       gameState.trick = [];
-      gameState.message = 'Your turn! Tap or drag a card to play.';
-      gameState.playerTurn = true;
-      gameState.round = 1;
-      gameState.playerScore = 0;
-      gameState.botScore = 0;
+      gameState.message = 'Dealing cards...';
+      gameState.playerTurn = false;
       renderStatus();
-      renderScore();
+      renderDealAnimation(fullDeck);
+    }
+
+    // --- DEAL ANIMATION ---
+    function renderDealAnimation(deck) {
+      const dealArea = document.getElementById('deal-animation-deck');
+      dealArea.innerHTML = '';
+      // Animate 12 cards (6 for player, 6 for bot)
+      let i = 0;
+      function animateNextCard() {
+        if (i >= 12) {
+          // Finish deal
+          gameState.phase = 'bidding';
+          gameState.hand = deck.slice(0, 6);
+          gameState.botHand = deck.slice(6, 12);
+          gameState.message = 'Your turn! Tap or drag a card to play.';
+          gameState.playerTurn = true;
+          renderTableFromSeats();
+          renderStatus();
+          startBiddingPhase();
+          return;
+        }
+        // Create card element
+        const card = deck[i];
+        const cardDiv = document.createElement('div');
+        cardDiv.className = 'absolute w-16 h-24 bg-white rounded shadow-lg flex items-center justify-center text-2xl border border-gray-400 z-50';
+        cardDiv.style.left = '50%';
+        cardDiv.style.top = '50%';
+        cardDiv.style.transform = 'translate(-50%, -50%)';
+        cardDiv.innerHTML = cardSVG(card.rank, card.suit);
+        dealArea.appendChild(cardDiv);
+        // Calculate target position (player or bot hand)
+        const isPlayer = i % 2 === 0;
+        // Find hand area
+        const handArea = document.getElementById(isPlayer ? 'player-hand' : 'bot-hand');
+        let targetRect;
+        if (handArea) {
+          const cards = handArea.children.length;
+          // Offset for each card
+          const handRect = handArea.getBoundingClientRect();
+          targetRect = {
+            left: handRect.left + cards * 32 + 16,
+            top: handRect.top + 16
+          };
+        } else {
+          // Fallback: center of table
+          const table = document.getElementById('table-layout');
+          const tableRect = table.getBoundingClientRect();
+          targetRect = {
+            left: tableRect.left + tableRect.width / 2,
+            top: tableRect.top + tableRect.height / 2
+          };
+        }
+        // --- Fallback animate using Web Animations API (no external libs) ---
+        const animation = cardDiv.animate([
+          { left: '50%', top: '50%', opacity: 1, offset: 0 },
+          { left: targetRect.left + 'px', top: targetRect.top + 'px', opacity: 0, offset: 1 }
+        ], {
+          duration: 250,
+          easing: 'ease-in-out',
+          fill: 'forwards'
+        });
+        animation.finished.then(() => {
+          // Add card to hand
+          if (isPlayer) gameState.hand.push(card);
+          else gameState.botHand.push(card);
+          renderTableFromSeats();
+          dealArea.removeChild(cardDiv);
+          i++;
+          setTimeout(animateNextCard, 40);
+        });
+      }
+      animateNextCard();
     }
 
     // --- PLAY PHASE: Play a card ---
     function playCard(idx) {
       if (gameState.phase !== 'play' || !gameState.playerTurn) return;
+      // Player plays card
       const card = gameState.hand.splice(idx, 1)[0];
-      gameState.trick.push({...card, player: 'You'});
+      gameState.trick = gameState.trick || [];
+      gameState.trick.push({rank: card.rank, suit: card.suit, player: 'You'});
       gameState.message = `You played: ${card.rank}${card.suit}`;
       gameState.playerTurn = false;
       renderStatus();
-      if (gameState.trick.length === 2) {
-        setTimeout(advanceRound, 800);
-      } else {
-        setTimeout(botPlay, 800);
-      }
+      renderTableFromSeats();
+
+      // Bot plays after slight delay
+      setTimeout(() => {
+        if (!gameState.botHand || gameState.botHand.length === 0) return;
+        // Simple bot: play random card
+        const botIdx = Math.floor(Math.random() * gameState.botHand.length);
+        const botCard = gameState.botHand.splice(botIdx, 1)[0];
+        gameState.trick.push({rank: botCard.rank, suit: botCard.suit, player: 'Bot'});
+        gameState.message = `Bot played: ${botCard.rank}${botCard.suit}`;
+        renderStatus();
+        renderTableFromSeats();
+
+        // Determine winner after another delay
+        setTimeout(() => {
+          const winner = determineTrickWinner(gameState.trick);
+          if (winner === 'You') {
+            gameState.playerScore = (gameState.playerScore || 0) + 1;
+            gameState.message = 'You win the trick!';
+          } else {
+            gameState.botScore = (gameState.botScore || 0) + 1;
+            gameState.message = 'Bot wins the trick!';
+          }
+          renderStatus();
+          renderTableFromSeats();
+          // Clear trick after short pause
+          setTimeout(() => {
+            gameState.trick = [];
+            // Check for game end
+            if (gameState.hand.length === 0 && gameState.botHand.length === 0) {
+              gameState.phase = 'end';
+              if ((gameState.playerScore || 0) > (gameState.botScore || 0)) {
+                gameState.message = 'Game over! You win!';
+              } else if ((gameState.playerScore || 0) < (gameState.botScore || 0)) {
+                gameState.message = 'Game over! Bot wins!';
+              } else {
+                gameState.message = 'Game over! It\'s a tie!';
+              }
+              renderStatus();
+              renderTableFromSeats();
+            } else {
+              gameState.playerTurn = true;
+              renderStatus();
+              renderTableFromSeats();
+            }
+          }, 1200);
+        }, 1200);
+      }, 900);
     }
 
     // --- BOT LOGIC: Play lowest card ---
@@ -239,7 +361,12 @@
 
     // --- RENDER STATUS ---
     function renderStatus() {
-      document.getElementById('status').textContent = gameState.message;
+      const statusDiv = document.getElementById('status');
+      if (gameState.phase === 'waiting-deal') {
+        statusDiv.textContent = 'Click "Deal" to start!';
+      } else {
+        statusDiv.textContent = gameState.message || '';
+      }
     }
 
     // --- RENDER SCORE PANEL ---
@@ -304,11 +431,115 @@
     // Start game logic
     document.getElementById('start-game-btn').onclick = () => {
       localState.started = true;
+      localState.hands = [[], [], [], []]; // Ensure hands are empty before dealing
       document.getElementById('lobby').style.display = 'none';
       document.getElementById('game-root').classList.remove('hidden');
-      startGameWithHands();
+      // Show Deal button, hide New Game until after deal
+      document.getElementById('deal-btn').classList.remove('hidden');
+      document.getElementById('new-game-btn').classList.add('hidden');
+      gameState.phase = 'waiting-deal';
+      gameState.hand = [];
+      gameState.botHand = [];
+      gameState.trick = [];
+      renderTableFromSeats();
+      renderStatus();
     };
-    renderLobby();
+
+    // Deal button handler
+    document.getElementById('deal-btn').onclick = () => {
+      document.getElementById('deal-btn').classList.add('hidden');
+      document.getElementById('new-game-btn').classList.remove('hidden');
+      animatedDeal();
+    };
+
+    // Animated deal function
+    function animatedDeal() {
+      const deck = shuffle(generateDeck());
+      const {hands, widow} = dealHands(deck);
+      localState.hands = hands;
+      localState.widow = widow;
+      gameState.hand = [];
+      gameState.botHand = [];
+      gameState.phase = 'deal-anim';
+      gameState.trick = [];
+      renderTableFromSeats();
+      renderStatus();
+      // Animate deal for all seats
+      let dealOrder = [];
+      for (let c = 0; c < hands[0].length; ++c) {
+        for (let i = 0; i < localState.seats.length; ++i) {
+          dealOrder.push({seat: i, card: hands[i][c], cardIdx: c});
+        }
+      }
+      let i = 0;
+      function animateNextCard() {
+        if (i >= dealOrder.length) {
+          // Finish deal: assign full hands
+          gameState.hand = hands[localState.playerSeat];
+          // For 1v1, assign botHand as the first BOT seat
+          const botSeat = localState.seats.findIndex(s => s === 'BOT');
+          gameState.botHand = hands[botSeat];
+          gameState.phase = 'bidding';
+          gameState.message = 'Your turn! Tap or drag a card to play.';
+          renderTableFromSeats();
+          renderStatus();
+          startBiddingPhase();
+          return;
+        }
+        const {seat, card, cardIdx} = dealOrder[i];
+        // Animate card from deck to seat area
+        const dealArea = document.getElementById('deal-animation-deck');
+        const cardDiv = document.createElement('div');
+        cardDiv.className = 'absolute w-16 h-24 bg-white rounded shadow-lg flex items-center justify-center text-2xl border border-gray-400 z-50';
+        cardDiv.style.left = '50%';
+        cardDiv.style.top = '50%';
+        cardDiv.style.transform = 'translate(-50%, -50%)';
+        // Determine if this is player or bot
+        const seatId = ['north', 'east', 'south', 'west'][seat];
+        cardDiv.innerHTML = (seat === localState.playerSeat) ? cardSVG(card[0], card[1]) : cardBackSVG();
+        dealArea.appendChild(cardDiv);
+        // Find hand area
+        const handArea = document.getElementById(seatId + '-hand');
+        let targetRect;
+        if (handArea) {
+          const cards = handArea.children.length;
+          const handRect = handArea.getBoundingClientRect();
+          targetRect = {
+            left: handRect.left + cards * 32 + 16,
+            top: handRect.top + 16
+          };
+        } else {
+          const table = document.getElementById('table-layout');
+          const tableRect = table.getBoundingClientRect();
+          targetRect = {
+            left: tableRect.left + tableRect.width / 2,
+            top: tableRect.top + tableRect.height / 2
+          };
+        }
+        // --- Fallback animate using Web Animations API (no external libs) ---
+        const animation = cardDiv.animate([
+          { left: '50%', top: '50%', opacity: 1, offset: 0 },
+          { left: targetRect.left + 'px', top: targetRect.top + 'px', opacity: 0, offset: 1 }
+        ], {
+          duration: 250,
+          easing: 'ease-in-out',
+          fill: 'forwards'
+        });
+        animation.finished.then(() => {
+          // Add card to hand
+          if (seat === localState.playerSeat) gameState.hand.push(card);
+          else {
+            if (!localState.hands[seat + '_anim']) localState.hands[seat + '_anim'] = [];
+            localState.hands[seat + '_anim'].push(card);
+          }
+          renderTableFromSeats();
+          dealArea.removeChild(cardDiv);
+          i++;
+          setTimeout(animateNextCard, 40);
+        });
+      }
+      animateNextCard();
+    }
 
     // --- Deck/Hand Utilities ---
     function generateDeck() {
@@ -333,6 +564,10 @@
       const {hands, widow} = dealHands(deck);
       localState.hands = hands;
       localState.widow = widow;
+      // --- Patch: Sync dealt hands to gameState for player and bot (1v1) ---
+      gameState.hand = hands[localState.playerSeat];
+      const botSeat = localState.seats.findIndex(s => s === 'BOT');
+      gameState.botHand = hands[botSeat];
       renderTableFromSeats();
     }
 
@@ -341,7 +576,6 @@
       const table = document.getElementById('table-layout');
       table.innerHTML = '';
       const seatNames = ['North', 'East', 'South', 'West'];
-      // Move seats farther from center
       const seatPositions = [
         {top: '5%', left: '50%', transform: 'translate(-50%, 0)'}, // North
         {top: '50%', right: '3%', transform: 'translate(0, -50%)'}, // East
@@ -352,37 +586,314 @@
         const seatDiv = document.createElement('div');
         seatDiv.className = 'absolute seat-area';
         Object.assign(seatDiv.style, seatPositions[i]);
-        // Add seat label
         const label = document.createElement('div');
         label.className = 'seat-label';
         label.textContent = seatNames[i] + (who ? `: ${who}` : '');
         seatDiv.appendChild(label);
-        // Render hand for player or bot
-        if (localState.hands && localState.hands[i]) {
+        // --- Render hands ---
+        const seatId = ['north', 'east', 'south', 'west'][i];
+        if (who === 'player') {
           const handDiv = document.createElement('div');
           handDiv.className = 'hand-area';
-          localState.hands[i].forEach(card => {
+          handDiv.id = seatId + '-hand';
+          (gameState.hand || []).forEach((card, idx) => {
             const cardEl = document.createElement('div');
             cardEl.className = 'card';
-            if (who === 'player') {
-              const rank = card.length === 3 ? card.slice(0,2) : card[0];
-              const suit = card[card.length-1];
-              cardEl.innerHTML = cardSVG(rank, suit);
-            } else {
-              cardEl.innerHTML = cardBackSVG();
-            }
+            const rank = card.rank || (card.length === 3 ? card.slice(0,2) : card[0]);
+            const suit = card.suit || card[card.length-1];
+            cardEl.innerHTML = cardSVG(rank, suit);
+            cardEl.style.cursor = 'pointer';
+            cardEl.onclick = () => playCard(idx);
+            handDiv.appendChild(cardEl);
+          });
+          seatDiv.appendChild(handDiv);
+        } else if (who === 'BOT') {
+          const handDiv = document.createElement('div');
+          handDiv.className = 'hand-area';
+          handDiv.id = seatId + '-hand';
+          const botCards = (gameState.phase === 'deal-anim' || gameState.phase === 'play') && localState.hands && localState.hands[i] ? localState.hands[i] : [];
+          botCards.forEach((card, idx) => {
+            const cardEl = document.createElement('div');
+            cardEl.className = 'card card-back';
+            cardEl.innerHTML = cardBackSVG();
             handDiv.appendChild(cardEl);
           });
           seatDiv.appendChild(handDiv);
         }
+        // --- Bidding UI ---
+        if (gameState.phase === 'bidding') {
+          const bidBadge = document.createElement('div');
+          bidBadge.className = 'absolute top-0 left-0 bg-yellow-500 text-black font-bold py-1 px-2 rounded';
+          bidBadge.textContent = gameState.bids[i] !== null ? gameState.bids[i] : '';
+          seatDiv.appendChild(bidBadge);
+          if (i === gameState.currentBidder) {
+            seatDiv.style.border = '4px solid #A3E635';
+          } else {
+            seatDiv.style.border = '';
+          }
+        }
+        // --- Trump UI ---
+        if (gameState.phase === 'trump-select') {
+          const trumpBadge = document.createElement('div');
+          trumpBadge.className = 'absolute top-0 right-0 bg-blue-500 text-white font-bold py-1 px-2 rounded';
+          trumpBadge.textContent = gameState.trump ? gameState.trump : '';
+          seatDiv.appendChild(trumpBadge);
+        }
         table.appendChild(seatDiv);
       });
-      // Center play area
+      // --- Center play area: Trick pile + Dropzone ---
       const centerDiv = document.createElement('div');
-      centerDiv.className = 'absolute left-1/2 top-1/2 w-24 h-24 bg-green-800 rounded-full flex items-center justify-center text-lg font-bold trick-center shadow-lg border-4 border-green-900';
+      centerDiv.className = 'absolute left-1/2 top-1/2 w-36 h-36 bg-green-800 rounded-full flex flex-col items-center justify-center text-lg font-bold trick-center shadow-lg border-4 border-green-900 dropzone';
       centerDiv.style.transform = 'translate(-50%, -50%)';
-      centerDiv.textContent = 'Trick';
+      centerDiv.id = 'trick-dropzone';
+      // Trick cards display
+      const trickRow = document.createElement('div');
+      trickRow.className = 'flex flex-row items-center justify-center gap-4 mb-2';
+      if (gameState.trick && gameState.trick.length > 0) {
+        gameState.trick.forEach(trickCard => {
+          const cDiv = document.createElement('div');
+          cDiv.className = 'card';
+          cDiv.innerHTML = cardSVG(trickCard.rank, trickCard.suit);
+          if (trickCard.player === 'You') cDiv.style.boxShadow = '0 0 0 3px #A3E635, 0 8px 24px rgba(0,0,0,0.28)';
+          if (trickCard.player === 'Bot') cDiv.style.boxShadow = '0 0 0 3px #FBBF24, 0 8px 24px rgba(0,0,0,0.28)';
+          trickRow.appendChild(cDiv);
+        });
+      } else {
+        const txt = document.createElement('span');
+        txt.textContent = 'Trick (drop here)';
+        trickRow.appendChild(txt);
+      }
+      centerDiv.appendChild(trickRow);
       table.appendChild(centerDiv);
+      // Attach SortableJS for drag-and-drop (player hand only)
+      setTimeout(() => {
+        const playerHand = document.getElementById('north-hand');
+        const dropzone = document.getElementById('trick-dropzone');
+        if (playerHand && typeof Sortable !== 'undefined') {
+          if (playerHand._sortableInstance) return; // Prevent multiple inits
+          playerHand._sortableInstance = Sortable.create(playerHand, {
+            animation: 150,
+            direction: 'horizontal',
+            group: {
+              name: 'hand',
+              pull: 'clone',
+              put: false
+            },
+            onEnd: function (evt) {
+              if (evt.to === playerHand && evt.oldIndex !== evt.newIndex) {
+                // Reorder only
+                const hand = gameState.hand;
+                const [moved] = hand.splice(evt.oldIndex, 1);
+                hand.splice(evt.newIndex, 0, moved);
+                renderTableFromSeats();
+              } else if (evt.to === dropzone || (evt.to !== playerHand && evt.from === playerHand)) {
+                // Card dropped onto trick pile (dropzone), or dragged far out
+                playCard(evt.oldIndex);
+              }
+            },
+          });
+        }
+        // Make trick dropzone accept cards
+        if (dropzone && typeof Sortable !== 'undefined') {
+          if (!dropzone._sortableInstance) {
+            dropzone._sortableInstance = Sortable.create(dropzone, {
+              group: {
+                name: 'hand',
+                pull: false,
+                put: true
+              },
+              onAdd: function(evt) {
+                // Card dropped on trick pile
+                playCard(evt.oldIndex);
+              },
+            });
+          }
+        }
+      }, 0);
+    }
+
+    // --- Bidding Phase ---
+    function startBiddingPhase() {
+      gameState.phase = 'bidding';
+      gameState.bids = [null, null, null, null]; // null = not yet bid, number = bid, 0 = pass
+      gameState.currentBidder = (localState.playerSeat + 1) % 4; // left of dealer starts
+      gameState.highestBid = 0;
+      gameState.highestBidder = null;
+      renderTableFromSeats();
+      renderBiddingPanel();
+      if (gameState.currentBidder !== localState.playerSeat) {
+        setTimeout(botBid, 600);
+      }
+    }
+
+    // --- Bidding UI ---
+    function renderBiddingPanel() {
+      let panel = document.getElementById('bidding-panel');
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'bidding-panel';
+        panel.className = 'fixed left-1/2 bottom-24 -translate-x-1/2 bg-green-900 bg-opacity-95 p-6 rounded-xl shadow-xl flex flex-col items-center z-40';
+        document.body.appendChild(panel);
+      }
+      panel.innerHTML = '';
+      if (gameState.phase !== 'bidding') {
+        panel.style.display = 'none';
+        return;
+      }
+      panel.style.display = 'flex';
+      // Only show if it's player's turn
+      if (gameState.currentBidder === localState.playerSeat) {
+        const bidLabel = document.createElement('div');
+        bidLabel.className = 'text-lg mb-2';
+        bidLabel.textContent = 'Your bid:';
+        panel.appendChild(bidLabel);
+        for (let bid = 1; bid <= 6; ++bid) {
+          const btn = document.createElement('button');
+          btn.className = 'bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-2 px-4 m-1 rounded';
+          btn.textContent = bid;
+          btn.onclick = () => submitBid(bid);
+          panel.appendChild(btn);
+        }
+        const passBtn = document.createElement('button');
+        passBtn.className = 'bg-gray-400 hover:bg-gray-500 text-black font-bold py-2 px-4 m-1 rounded';
+        passBtn.textContent = 'Pass';
+        passBtn.onclick = () => submitBid(0);
+        panel.appendChild(passBtn);
+      } else {
+        // Show waiting message
+        const waitMsg = document.createElement('div');
+        waitMsg.className = 'text-lg text-gray-200';
+        waitMsg.textContent = 'Waiting for other players to bid...';
+        panel.appendChild(waitMsg);
+      }
+    }
+
+    // Hide bidding panel when phase changes
+    function hideBiddingPanel() {
+      const panel = document.getElementById('bidding-panel');
+      if (panel) panel.style.display = 'none';
+    }
+
+    function submitBid(bid) {
+      gameState.bids[localState.playerSeat] = bid;
+      if (bid > gameState.highestBid) {
+        gameState.highestBid = bid;
+        gameState.highestBidder = localState.playerSeat;
+      }
+      nextBidder();
+      // Hide panel after player bids
+      hideBiddingPanel();
+    }
+
+    function nextBidder() {
+      // Find next seat who hasn't bid
+      let next = (gameState.currentBidder + 1) % 4;
+      while (gameState.bids[next] !== null && next !== gameState.currentBidder) {
+        next = (next + 1) % 4;
+      }
+      if (gameState.bids[next] === null) {
+        gameState.currentBidder = next;
+        if (next === localState.playerSeat) {
+          renderBiddingPanel();
+        } else {
+          // Bot turn
+          setTimeout(botBid, 600);
+        }
+      } else {
+        // All have bid
+        finishBidding();
+      }
+      renderTableFromSeats();
+    }
+
+    function botBid() {
+      // Simple bot: random bid or pass
+      const seat = gameState.currentBidder;
+      let bid = Math.random() < 0.7 ? Math.floor(Math.random() * 6) + 1 : 0;
+      if (bid <= gameState.highestBid) bid = 0;
+      gameState.bids[seat] = bid;
+      if (bid > gameState.highestBid) {
+        gameState.highestBid = bid;
+        gameState.highestBidder = seat;
+      }
+      nextBidder();
+    }
+
+    function finishBidding() {
+      renderBiddingPanel();
+      startTrumpSelection();
+    }
+
+    // --- Trump Selection Phase ---
+    function startTrumpSelection() {
+      gameState.phase = 'trump-select';
+      gameState.trump = null;
+      renderTableFromSeats();
+      renderTrumpPanel();
+      // If bot is the winner, pick trump automatically
+      if (gameState.highestBidder !== localState.playerSeat) {
+        setTimeout(botPickTrump, 800);
+      }
+    }
+
+    function renderTrumpPanel() {
+      let panel = document.getElementById('trump-panel');
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'trump-panel';
+        panel.className = 'fixed left-1/2 bottom-24 -translate-x-1/2 bg-blue-900 bg-opacity-95 p-6 rounded-xl shadow-xl flex flex-col items-center z-40';
+        document.body.appendChild(panel);
+      }
+      panel.innerHTML = '';
+      if (gameState.phase !== 'trump-select') {
+        panel.style.display = 'none';
+        return;
+      }
+      panel.style.display = 'flex';
+      if (gameState.highestBidder === localState.playerSeat) {
+        const label = document.createElement('div');
+        label.className = 'text-lg mb-2';
+        label.textContent = 'You won the bid! Pick a trump suit:';
+        panel.appendChild(label);
+        ['C','D','H','S'].forEach(suit => {
+          const btn = document.createElement('button');
+          btn.className = 'bg-yellow-300 hover:bg-yellow-400 text-black font-bold py-2 px-4 m-1 rounded';
+          btn.textContent =
+            suit === 'C' ? 'Clubs ♣' :
+            suit === 'D' ? 'Diamonds ♦' :
+            suit === 'H' ? 'Hearts ♥' :
+            suit === 'S' ? 'Spades ♠' : suit;
+          btn.onclick = () => submitTrump(suit);
+          panel.appendChild(btn);
+        });
+      } else {
+        const waitMsg = document.createElement('div');
+        waitMsg.className = 'text-lg text-gray-200';
+        waitMsg.textContent = 'Waiting for the winning bidder to pick trump...';
+        panel.appendChild(waitMsg);
+      }
+    }
+
+    function submitTrump(suit) {
+      gameState.trump = suit;
+      finishTrumpSelection();
+    }
+
+    function botPickTrump() {
+      // Simple bot: pick random suit
+      const suits = ['C','D','H','S'];
+      const suit = suits[Math.floor(Math.random()*4)];
+      gameState.trump = suit;
+      finishTrumpSelection();
+    }
+
+    function finishTrumpSelection() {
+      const panel = document.getElementById('trump-panel');
+      if (panel) panel.style.display = 'none';
+      gameState.phase = 'play';
+      renderTableFromSeats();
+      renderStatus();
+      // TODO: Implement widow/discard or start play phase
     }
 
     // --- Button handlers ---

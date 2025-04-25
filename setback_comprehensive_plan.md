@@ -35,9 +35,14 @@ The entire client runs inside a **single `index.html` file** using CDN scripts (
 |---------|---------|----------|
 | UI Utility | **Tailwind Play CDN** | `<script src="https://cdn.tailwindcss.com"></script>` |
 | Drag & Drop | **SortableJS** v1.15 | `https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js` |
-| Animations | **Framer Motion** UMD | `https://cdn.jsdelivr.net/npm/framer-motion@11/dist/framer-motion.umd.js` |
+| Animations | **Web Animations API** | *Built-in: `element.animate()` (no external dependency)* |
 | Audio | **Howler.js** v2.2 | `https://cdn.jsdelivr.net/npm/howler@2.2.3/dist/howler.min.js` |
 | Realtime DB | **Firebase v10 Compat** | app, auth, firestore compat bundles |
+
+**Note:**
+- Framer Motion was removed due to persistent CDN/network loading issues. All animations now use the built-in Web Animations API for reliability and offline support.
+
+---
 
 ### 3.2  Pure Rule Engine (`/engine.ts`)
 Defined in `setback_rule_engine_spec.md`:
@@ -79,7 +84,7 @@ Clients subscribe via `onSnapshot` and write diffs using a `playMove` callable f
 | Phase | Goal | Key Deliverables |
 |-------|------|------------------|
 | **1 – Core Offline** | Play full round vs. 3 bots locally | Deck utils, engine.ts, bot-engine.ts, basic table UI, drag/tap play, score panel |
-| **2 – Deal Animation** | Polish feel | Framer Motion fan-out, SFX shuffle, card-flip |
+| **2 – Deal Animation** | Polish feel | Web Animations API fan-out, SFX shuffle, card-flip |
 | **3 – Multiplayer Lobby** | Anonymous auth & seat selection | Lobby UI, Firestore `games/{roomId}` schema, onSnapshot hydration, playMove diff writes |
 | **4 – PWA / Offline** | Installable & works offline | service-worker.js, local IndexedDB save, offline bot fallback, reconnect sync |
 | **5 – Testing & QA** | Confidence | Vitest ≥ 95% coverage, Cypress happy-path game, Lighthouse PWA ≥ 90 |
@@ -104,7 +109,7 @@ Clients subscribe via `onSnapshot` and write diffs using a `playMove` callable f
   • Slide-in tally, restart button  
 
 ### 5.2  Phase 2 – Deal Animation (1 day)
-- Framer Motion fan-out from deck center.  
+- Web Animations API fan-out from deck center.  
 - Shuffle SFX via Howler.  
 
 ### 5.3  Phase 3 – Multiplayer Lobby (3 days)
@@ -147,7 +152,7 @@ Clients subscribe via `onSnapshot` and write diffs using a `playMove` callable f
 |------|--------|-----------|
 | Firestore latency & quotas | Laggy multiplayer | Throttle diff rate, compress state, store minimal snapshot + ops |
 | Offline complexity | Desync on reconnect | Hash state, CRC diff, merge on reconnect, authoritative seat |
-| Animation perf on mobile | Jank | Framer Motion `will-change`, reduce blur/shadow on low-end |
+| Animation perf on mobile | Jank | Web Animations API `will-change`, reduce blur/shadow on low-end |
 | Rule engine bugs | Incorrect scoring | 100% unit test coverage, golden test vectors |
 
 ---
@@ -167,5 +172,14 @@ Clients subscribe via `onSnapshot` and write diffs using a `playMove` callable f
 1. Scaffold `deck-utils.ts`, `engine.ts`, `tests/engine.spec.ts`.  
 2. Integrate these into existing `index.html` with dummy buttons.  
 3. Build minimal lobby and seat render with current local bot logic.
+
+---
+
+### 4.2  UI/UX Fixes (2025-04-24)
+- **Bot hands are now hidden until the deal animation begins.**
+- **Dealing animation** is implemented using the Web Animations API, one card at a time.
+- **No external animation library is required.**
+- **Game starts with an empty table** (no bot or player cards visible) until the user clicks "Deal."
+- **All CDN/network dependency issues for animation are resolved.**
 
 > **Let’s build Setback one phase at a time—begin with deck utils + rule engine!**
